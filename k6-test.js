@@ -18,7 +18,7 @@ export const options = {
   },
 };
 
-const BASE_URL = 'http://localhost:8080';
+const BASE_URL = 'http://34.9.131.147:8080';
 
 // Test data
 const validPatient = {
@@ -39,6 +39,10 @@ const invalidPatient = {
   accessPin: '0000',
 };
 
+function log(label, res) {
+  console.log(`[${label}] status=${res.status} duration=${res.timings.duration.toFixed(2)}ms body=${res.body}`);
+}
+
 export default function () {
   group('Healthcare Auth - Valid Login', function () {
     const res = http.post(
@@ -46,6 +50,8 @@ export default function () {
       JSON.stringify(validPatient),
       { headers: { 'Content-Type': 'application/json' } }
     );
+
+    log('Valid Login', res);
 
     const success = check(res, {
       'valid login: status 200': (r) => r.status === 200,
@@ -64,6 +70,8 @@ export default function () {
       { headers: { 'Content-Type': 'application/json' } }
     );
 
+    log('Blocked User', res);
+
     check(res, {
       'blocked user: status 500': (r) => r.status === 500,
     });
@@ -78,6 +86,8 @@ export default function () {
       { headers: { 'Content-Type': 'application/json' } }
     );
 
+    log('Invalid Credentials', res);
+
     check(res, {
       'invalid credentials: status 500': (r) => r.status === 500,
     });
@@ -87,6 +97,9 @@ export default function () {
 
   group('Gateway Health Check', function () {
     const res = http.get(`${BASE_URL}/health`);
+
+    log('Health Check', res);
+
     check(res, {
       'gateway health: status 200': (r) => r.status === 200,
     });
