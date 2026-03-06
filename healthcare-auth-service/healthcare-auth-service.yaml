@@ -1,0 +1,46 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: healthcare-auth-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: healthcare-auth-service
+  template:
+    metadata:
+      labels:
+        app: healthcare-auth-service
+      annotations:
+        instrumentation.opentelemetry.io/inject-java: "observability/spring-instrumentation"
+    spec:
+      containers:
+        - name: healthcare-auth-service
+          image: sumanth17121988/healthcare-auth-service:1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8083
+          volumeMounts:
+            - name: healthcare-auth-config-volume
+              mountPath: /app/config/application.properties
+              subPath: application.properties
+              readOnly: true
+      volumes:
+        - name: healthcare-auth-config-volume
+          configMap:
+            name: healthcare-auth-config
+            items:
+              - key: application.properties
+                path: application.properties
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: healthcare-auth-service
+spec:
+  type: LoadBalancer
+  selector:
+    app: healthcare-auth-service
+  ports:
+    - port: 8083
+      targetPort: 8083

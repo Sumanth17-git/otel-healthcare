@@ -1,0 +1,41 @@
+apiVersion: opentelemetry.io/v1alpha1
+kind: Instrumentation
+metadata:
+  name: spring-instrumentation
+  namespace: observability
+spec:
+  exporter:
+    # This points to the service you just verified
+    #    endpoint: http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4318
+    endpoint: http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4317
+  propagators:
+    - tracecontext
+    - baggage
+  sampler:
+    type: parentbased_traceidratio
+    argument: "1" # Capture everything for now
+  java:
+    image: ghcr.io/open-telemetry/opentelemetry-operator/autoinstrumentation-java:latest
+    env:
+      - name: OTEL_EXPORTER_OTLP_PROTOCOL
+        value: "grpc"
+      - name: OTEL_INSTRUMENTATION_SPRING_WEB_ENABLED
+        value: "true"
+      - name: OTEL_INSTRUMENTATION_SPRING_DATA_ENABLED
+        value: "true"
+      - name: OTEL_INSTRUMENTATION_METHODS_INCLUDE
+        value: "com.example.healthcare.auth.*[*];com.example.healthcare.patient.*[*];com.example.healthcare.compliance.*[*];com.example.healthcare.gateway.*[*]"
+      - name: OTEL_EXPERIMENTAL_RESOURCE_DISABLED_KEYS
+        value: ""
+      - name: OTEL_INSTRUMENTATION_COMMON_DEFAULT_ENABLED
+        value: "true"
+      - name: OTEL_INSTRUMENTATION_JDBC_ENABLED
+        value: "true"
+      - name: OTEL_METRICS_EXPORTER
+        value: "otlp"
+      - name: OTEL_TRACES_EXPORTER
+        value: "otlp"
+      - name: OTEL_LOGS_EXPORTER
+        value: "otlp"
+      - name: OTEL_INSTRUMENTATION_ANNOTATIONS_ENABLED
+        value: "true"

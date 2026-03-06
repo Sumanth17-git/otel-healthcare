@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: compliance-service
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: compliance-service
+  template:
+    metadata:
+      labels:
+        app: compliance-service
+      annotations:
+        instrumentation.opentelemetry.io/inject-java: "observability/spring-instrumentation"
+    spec:
+      containers:
+        - name: compliance-service
+          image: sumanth17121988/compliance-service:1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8082
+          env:
+            - name: SPRING_DATASOURCE_URL
+              value: jdbc:mysql://healthcare-db.default.svc.cluster.local:3306/healthcaredb
+            - name: SPRING_DATASOURCE_USERNAME
+              value: appuser
+            - name: SPRING_DATASOURCE_PASSWORD
+              value: apppass
+          volumeMounts:
+            - name: config
+              mountPath: /config/application.properties
+              subPath: application.properties
+      volumes:
+        - name: config
+          configMap:
+            name: compliance-service-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: compliance-service
+spec:
+  type: LoadBalancer
+  selector:
+    app: compliance-service
+  ports:
+    - port: 8082
+      targetPort: 8082

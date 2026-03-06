@@ -1,0 +1,49 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: healthcare-gateway
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: healthcare-gateway
+  template:
+    metadata:
+      labels:
+        app: healthcare-gateway
+      annotations:
+        instrumentation.opentelemetry.io/inject-java: "observability/spring-instrumentation"
+    spec:
+      containers:
+        - name: healthcare-gateway
+          image: sumanth17121988/healthcare-gateway:1
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: AUTH_SERVICE_URL
+              value: "http://healthcare-auth-service:8083"
+          volumeMounts:
+            - name: healthcare-gateway-config-volume
+              mountPath: /app/config/application.properties
+              subPath: application.properties
+              readOnly: true
+      volumes:
+        - name: healthcare-gateway-config-volume
+          configMap:
+            name: healthcare-gateway-config
+            items:
+              - key: application.properties
+                path: application.properties
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: healthcare-gateway
+spec:
+  type: LoadBalancer
+  selector:
+    app: healthcare-gateway
+  ports:
+    - port: 8080
+      targetPort: 8080

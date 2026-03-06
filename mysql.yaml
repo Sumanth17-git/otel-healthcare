@@ -1,0 +1,47 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: healthcare-db
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: healthcare-db
+  template:
+    metadata:
+      labels:
+        app: healthcare-db
+    spec:
+      containers:
+        - name: healthcare-db
+          image: mysql:8.0
+          ports:
+            - containerPort: 3306
+          env:
+            - name: MYSQL_ROOT_PASSWORD
+              value: rootpass
+            - name: MYSQL_DATABASE
+              value: healthcaredb
+            - name: MYSQL_USER
+              value: appuser
+            - name: MYSQL_PASSWORD
+              value: apppass
+          volumeMounts:
+            - name: healthcare-db-data
+              mountPath: /var/lib/mysql
+      volumes:
+        - name: healthcare-db-data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: healthcare-db
+spec:
+  type: LoadBalancer
+  selector:
+    app: healthcare-db
+  ports:
+    - port: 3306
+      targetPort: 3306
+
