@@ -1,40 +1,130 @@
-﻿# Authentication Multiservices
+# otel-healthcare
 
-This repository contains a robust microservices architecture for authentication and policy management, built with Spring Boot (Java 17). It includes full-stack observability using **OpenTelemetry (OTel)**, exporting metrics, logs, and distributed traces to **New Relic**.
+A healthcare microservices architecture built with **Spring Boot 3.5** (Java 17), featuring full-stack observability using **OpenTelemetry (OTel)** — exporting distributed traces, metrics, and logs to **New Relic**.
 
 ## Services
-- `user-service`
-- `auth-service`
-- `gateway-service`
-- `policy-service`
 
-## Full-Stack OpenTelemetry Implementation Guide
+| Service | Port | Description |
+|---|---|---|
+| `healthcare-gateway` | 8080 | Spring Cloud Gateway — routes all inbound requests |
+| `healthcare-auth-service` | 8083 | Authentication — validates patient credentials, issues tokens |
+| `patient-service` | 8081 | Patient registry — validates patient ID, password, and access pin |
+| `compliance-service` | 8082 | Compliance check — enforces access policies per patient |
 
-The following steps outline how full-stack OpenTelemetry is implemented in this Kubernetes cluster, and how to validate the setup.
+## Architecture
+
+```
+Client
+  │
+  ▼
+healthcare-gateway (8080)
+  │   routes /auth/** → healthcare-auth-service
+  ▼
+healthcare-auth-service (8083)
+  ├── POST /patients/validate  → patient-service (8081)
+  └── POST /compliance/check   → compliance-service (8082)
+```
+
+## Tech Stack
+
+- **Spring Boot 3.5.x** — Web, JPA, Actuator, Spring Cloud Gateway
+- **OpenTelemetry** — Auto-instrumentation via Java agent (injected by OTel Operator)
+- **New Relic** — Observability backend (traces, metrics, logs)
+- **Prometheus** — Metrics scraping via Micrometer
+- **Logstash JSON logging** — Structured logs with MDC trace context
+- **MySQL** — Production database (`healthcaredb`)
+- **H2** — In-memory database for local development
+- **Kubernetes** — Deployment, Service, ConfigMap YAMLs per service
+- **k6** — Load testing script (`k6-test.js`)
+
+---
+
+## Local Development
 
 ### Prerequisites
-- A running Kubernetes cluster.
-- Helm installed.
-- New Relic License Key configured (used in `custom-1.yaml`).
+- Java 17+
+- Maven wrapper (`./mvnw`) included in each service
+
+### Start all services
+
+```bash
+# patient-service (port 8081) — uses H2 in-memory DB locally
+cd patient-service
+./mvnw spring-boot:run -Dspring-boot.run.jvmArguments="\
+  -Dspring.datasource.url=jdbc:h2:mem:patientdb;DB_CLOSE_DELAY=-1 \
+  -Dspring.datasource.driver-class-name=org.h2.Driver \
+  -Dspring.datasource.username=sa \
+  -Dspring.datasource.password= \
+  -Dspring.jpa.database-platform=org.hibernate.dialect.H2Dialect"
+
+# compliance-service (port 8082) — uses H2 in-memory DB locally
+cd compliance-service
+./mvnw spring-boot:run -Dspring-boot.run.jvmArguments="\
+  -Dspring.datasource.url=jdbc:h2:mem:compliancedb;DB_CLOSE_DELAY=-1 \
+  -Dspring.datasource.driver-class-name=org.h2.Driver \
+  -Dspring.datasource.username=sa \
+  -Dspring.datasource.password= \
+  -Dspring.jpa.database-platform=org.hibernate.dialect.H2Dialect"
+
+# healthcare-auth-service (port 8083)
+cd healthcare-auth-service
+./mvnw spring-boot:run
+
+# healthcare-gateway (port 8080)
+# AUTH_SERVICE_URL defaults to http://localhost:8083 — no env var needed
+cd healthcare-gateway
+./mvnw spring-boot:run
+```
+
+### Test the login endpoint
+
+```bash
+# Valid patient
+curl -X POST http://localhost:8080/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"patientId":"patient001","password":"pass123","accessPin":"4321"}'
+
+# Blocked user (returns 500)
+curl -X POST http://localhost:8080/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"patientId":"staff001","password":"admin123","accessPin":"9999"}'
+
+# Gateway health
+curl http://localhost:8080/health
+```
+
+### Run k6 load tests
+
+```bash
+k6 run k6-test.js
+```
+
+---
+
+## Kubernetes Deployment
+
+### Prerequisites
+- A running Kubernetes cluster
+- Helm installed
+- New Relic License Key
 
 ### Step 1: Create the Observability Namespace
+
 ```bash
 kubectl create ns observability
 ```
 
 ### Step 2: Deploy the OpenTelemetry Collector
-We use Helm to deploy the OpenTelemetry Collector. The collector is configured via `otel-collector-k8s.yaml` to receive telemetry via OTLP, collect Kubernetes host/kubelet metrics, and export data directly to New Relic (`otlphttp/newrelic`).
 
 ```bash
 helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm-charts
 helm repo update
 
-# Install the OTel Collector using the custom configuration
-helm upgrade --install otel-collector open-telemetry/opentelemetry-collector -n observability -f otel-collector-k8s.yaml
+helm upgrade --install otel-collector open-telemetry/opentelemetry-collector \
+  -n observability -f Otel-collector.yaml
 ```
 
 ### Step 3: Deploy the OpenTelemetry Operator
-The OpenTelemetry Operator manages the automatic injection of instrumentation libraries (e.g., OpenTelemetry Java agent) into our microservices pods.
 
 ```bash
 helm upgrade --install otel-operator open-telemetry/opentelemetry-operator \
@@ -43,73 +133,93 @@ helm upgrade --install otel-operator open-telemetry/opentelemetry-operator \
   --set admissionWebhooks.autoGenerateCert.enabled=true
 ```
 
-### Step 4: Apply the Instrumentation Resource
-Ensure the instrumentation CR (Custom Resource) is applied to the cluster, which tells the Operator how to instrument the Spring Boot apps (typically `spring-instrumentation`). Apply it using your configuration file:
+### Step 4: Apply RBAC and Instrumentation Resource
 
 ```bash
+kubectl apply -f otel-rbac.yaml
 kubectl apply -f instrumentation_otel.yaml --namespace observability
-```
 
-*You can verify the instrumentation resource:*
-```bash
+# Verify
 kubectl get instrumentation -n observability
 kubectl describe instrumentation spring-instrumentation -n observability
 ```
 
-### Step 5: Add Annotation to Deployments
-To enable automatic instrumentation, update the `spec.template.metadata.annotations` in your microservice deployment files (such as `user-service.yaml`) to inject the OpenTelemetry Java Agent from the `observability` namespace:
-
-```yaml
-      annotations:
-        instrumentation.opentelemetry.io/inject-java: "observability/spring-instrumentation"
-```
-
-### Step 6: Restart the Services
-To apply the automatic instrumentation, restart the Deployments/Daemonsets. The Operator will inject the `JAVA_TOOL_OPTIONS` with the `-javaagent` automatically.
+### Step 5: Deploy MySQL
 
 ```bash
-# Restart Operator and Collector if necessary
+kubectl apply -f mysql-server.yaml
+```
+
+### Step 6: Deploy All Microservices
+
+```bash
+# Apply ConfigMaps first
+kubectl apply -f patient-service/patient-service-config.yaml
+kubectl apply -f compliance-service/compliance-service-config.yaml
+kubectl apply -f healthcare-auth-service/healthcare-auth-config.yaml
+kubectl apply -f healthcare-gateway/healthcare-gateway-config.yaml
+
+# Deploy services
+kubectl apply -f patient-service/patient-service.yaml
+kubectl apply -f compliance-service/compliance-service.yaml
+kubectl apply -f healthcare-auth-service/healthcare-auth-service.yaml
+kubectl apply -f healthcare-gateway/healthcare-gateway.yaml
+```
+
+### Step 7: Restart to Inject OTel Java Agent
+
+```bash
 kubectl rollout restart deployment/otel-operator-opentelemetry-operator -n observability
 kubectl rollout restart daemonset/otel-collector-opentelemetry-collector-agent -n observability
 
-# Restart microservices to inject the OTel Java Agent
-# (Replace your-app-namespace with the namespace where your apps are deployed, e.g., default)
-kubectl rollout restart deployment user-service auth-service gateway-service policy-service
+kubectl rollout restart deployment \
+  patient-service compliance-service healthcare-auth-service healthcare-gateway
 ```
 
 ---
 
-## Testing & Validation
+## Configuration
 
-Once the services are up and running, follow these steps to verify telemetry is flowing successfully.
+### Gateway Routing (Environment-Driven)
 
-### 1. Verify Java Agent Injection
-Check if the OpenTelemetry Java agent was successfully injected into the containers.
+The gateway route URI is controlled by the `AUTH_SERVICE_URL` environment variable:
+
+| Environment | Value |
+|---|---|
+| Local | `http://localhost:8083` (default, no env var needed) |
+| Kubernetes | `http://healthcare-auth-service:8083` (set in `healthcare-gateway.yaml`) |
+
+To override locally:
 ```bash
-# Verify JAVA_TOOL_OPTIONS includes the OTEL javaagent
-# (Replace <pod-name> with the actual name of your microservice pod)
+AUTH_SERVICE_URL=http://my-host:8083 java -jar healthcare-gateway.jar
+```
+
+---
+
+## Validation
+
+### Verify OTel Java Agent Injection
+
+```bash
 kubectl exec <pod-name> -- env | grep JAVA_TOOL_OPTIONS
 ```
 
-### 2. Verify Operator & Collector Logs
-Check the logs to ensure there are no connection drops or RBAC permission issues.
-```bash
-# Check OTel Operator logs for successful instrumentation injection
-kubectl logs -l app.kubernetes.io/name=opentelemetry-operator -n observability -c manager | grep instrumentation
+### Verify OTel Operator and Collector Logs
 
-# Check OTel Collector logs to see if data is being exported
+```bash
+kubectl logs -l app.kubernetes.io/name=opentelemetry-operator -n observability -c manager | grep instrumentation
 kubectl logs -l app.kubernetes.io/name=opentelemetry-collector -n observability -f
 ```
 
-### 3. Test Network Connectivity
-Verify that the microservices can reach the OpenTelemetry Collector on the OTLP port (4317).
+### Verify Network Connectivity to Collector
+
 ```bash
-# Verify connectivity from app pod to collector
-kubectl exec <app-pod> -- curl -v http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4317
+kubectl exec <app-pod> -- curl -v \
+  http://otel-collector-opentelemetry-collector.observability.svc.cluster.local:4317
 ```
 
-### 4. Verify in New Relic
-1. Open your New Relic Dashboard.
-2. Go to **APM & Services**. You should see `user-service`, `auth-service`, `gateway-service`, and `policy-service` listed.
-3. Click on **Distributed Tracing** to view end-to-end request flows across the microservices.
-4. Check **Infrastructure** or **Kubernetes** to see cluster metrics.
+### Verify in New Relic
+
+1. Open **New Relic → APM & Services** — you should see `healthcare-auth-service`, `patient-service`, `compliance-service`, `healthcare-gateway`
+2. Go to **Distributed Tracing** to view end-to-end request flows
+3. Check **Infrastructure → Kubernetes** for cluster metrics
