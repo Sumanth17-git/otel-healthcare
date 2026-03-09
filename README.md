@@ -121,7 +121,7 @@ helm repo add open-telemetry https://open-telemetry.github.io/opentelemetry-helm
 helm repo update
 
 helm upgrade --install otel-collector open-telemetry/opentelemetry-collector \
-  -n observability -f Otel-collector.yaml
+  -n observability -f otel-collector-allinone.yaml
 ```
 
 ### Step 3: Deploy the OpenTelemetry Operator
