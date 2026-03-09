@@ -1,0 +1,109 @@
+mode: daemonset
+
+image:
+  repository: otel/opentelemetry-collector-contrib
+
+presets:
+  logsCollection:
+    enabled: true
+    includeCollectorLogs: false
+  kubernetesAttributes:
+    enabled: true
+  kubeletMetrics:
+    enabled: true
+  hostMetrics:
+    enabled: true
+
+service:
+  enabled: true
+  type: ClusterIP
+
+serviceAccount:
+  create: true
+  name: otel-collector
+
+clusterRole:
+  create: true
+  rules:
+    - apiGroups: [""]
+      resources: ["pods", "nodes", "nodes/stats", "nodes/proxy", "namespaces"]
+      verbs: ["get", "list", "watch"]
+    - apiGroups: ["apps"]
+      resources: ["replicasets", "deployments", "daemonsets", "statefulsets"]
+      verbs: ["get", "list", "watch"]
+    - apiGroups: ["batch"]
+      resources: ["jobs", "cronjobs"]
+      verbs: ["get", "list", "watch"]
+
+extraEnvs:
+  - name: K8S_NODE_NAME
+    valueFrom:
+      fieldRef:
+        fieldPath: spec.nodeName
+  # Create a Datadog API key from:
+  # Organization Settings → API Keys in Datadog UI
+  - name: DD_API_KEY
+    value: "<YOUR_DATADOG_API_KEY>"
+  - name: K8S_CLUSTER_NAME
+    value: "k8s-cluster"
+
+config:
+  receivers:
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+    kubeletstats:
+      collection_interval: 60s
+      auth_type: serviceAccount
+      endpoint: "https://${env:K8S_NODE_NAME}:10250"
+      insecure_skip_verify: true
+    hostmetrics:
+      collection_interval: 60s
+      scrapers:
+        cpu: {}
+        memory: {}
+        disk: {}
+        network: {}
+
+  processors:
+    batch: {}
+    memory_limiter:
+      check_interval: 1s
+      limit_mib: 400
+    k8sattributes:
+      auth_type: serviceAccount
+    resource:
+      attributes:
+        - key: k8s.cluster.name
+          value: ${env:K8S_CLUSTER_NAME}
+          action: upsert
+
+  exporters:
+    debug:
+      verbosity: normal
+    # Datadog OTLP ingestion endpoint
+    # US region:  https://api.datadoghq.com
+    # EU region:  https://api.datadoghq.eu
+    # US3 region: https://api.us3.datadoghq.com
+    # US5 region: https://api.us5.datadoghq.com
+    otlphttp/datadog:
+      endpoint: "https://api.datadoghq.com"
+      headers:
+        DD-API-KEY: "${env:DD_API_KEY}"
+
+  service:
+    pipelines:
+      metrics:
+        receivers: [kubeletstats, hostmetrics, otlp]
+        processors: [memory_limiter, k8sattributes, resource, batch]
+        exporters: [otlphttp/datadog]
+      logs:
+        processors: [memory_limiter, k8sattributes, resource, batch]
+        exporters: [otlphttp/datadog]
+      traces:
+        receivers: [otlp]
+        processors: [memory_limiter, k8sattributes, resource, batch]
+        exporters: [otlphttp/datadog, debug]
