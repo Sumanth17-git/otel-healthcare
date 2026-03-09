@@ -1,0 +1,132 @@
+mode: daemonset
+
+image:
+  repository: otel/opentelemetry-collector-contrib
+# PRESETS: This handles the volume mounts for logs and all RBAC permissions automatically
+presets:
+  logsCollection:
+    enabled: true
+    includeCollectorLogs: false
+  kubernetesAttributes:
+    enabled: true
+  kubeletMetrics:
+    enabled: true
+  hostMetrics:
+    enabled: true
+# FIX: This forces the creation of a ClusterIP Service so we can find the endpoint
+service:
+  enabled: true
+  type: ClusterIP
+serviceAccount:
+  create: true
+  name: otel-collector
+
+# FIX 1 & 2: Added explicit RBAC rules for GKE and K8s metadata
+clusterRole:
+  create: true
+  rules:
+    - apiGroups: [""]
+      resources: ["pods", "nodes", "nodes/stats", "nodes/proxy", "namespaces"]
+      verbs: ["get", "list", "watch"]
+    - apiGroups: ["apps"]
+      resources: ["replicasets", "deployments", "daemonsets", "statefulsets"]
+      verbs: ["get", "list", "watch"]
+    - apiGroups: ["batch"]
+      resources: ["jobs", "cronjobs"]
+      verbs: ["get", "list", "watch"]
+
+extraEnvs:
+  # New Relic ingest license
+  - name: NEW_RELIC_LICENSE_KEY
+    value: "d9b5d8c863fbc593958c330ad1f853ccFFFFNRAL"
+  - name: K8S_CLUSTER_NAME
+    value: "k8s-cluster"
+  # Dynatrace ACCESS token
+  - name: DT_API_TOKEN
+    value: "dt0c01.LOGJCN5RTI2Y56FHT57M4SQA.MRAENT73OOLVIB6REKYGATAVYQN46FW5QPZGLKVUSHCW3JYGU4O54CPGYVJIFN7S"
+  # Datadog API key
+  - name: DD_API_KEY
+    value: "66da4c2f921c6cb2495383b9743864b3"
+
+config:
+  receivers:
+# Adding OTLP now so the ports open, even if no one is using them yet
+    otlp:
+      protocols:
+        grpc:
+          endpoint: 0.0.0.0:4317
+        http:
+          endpoint: 0.0.0.0:4318
+    kubeletstats:
+      collection_interval: 60s
+      auth_type: serviceAccount
+      endpoint: "https://${env:K8S_NODE_NAME}:10250"
+      insecure_skip_verify: true
+    hostmetrics:
+      collection_interval: 60s
+      scrapers:
+        cpu: {}
+        memory: {}
+        disk: {}
+        network: {}
+
+  processors:
+    memory_limiter:
+      check_interval: 1s
+      limit_mib: 400
+    # Adds Kubernetes metadata like
+    # pod name, namespace, container, node
+    k8sattributes:
+      auth_type: serviceAccount
+    cumulativetodelta: {}
+    resource:
+      attributes:
+        - key: k8s.cluster.name
+          value: ${env:K8S_CLUSTER_NAME}
+          action: upsert
+  # Batch processor improves export efficiency
+  # and prevents vendor API throttling
+    batch:
+      send_batch_max_size: 1000
+      send_batch_size: 100
+      timeout: 10s
+
+  exporters:
+    debug:
+      verbosity: normal # This prints spans to the collector logs
+  # New Relic OTLP exporter
+    otlphttp/newrelic:
+      # FIX 3: Removed the '/v1/metrics' suffix to prevent 404
+      endpoint: "https://otlp.nr-data.net" 
+      headers:
+        api-key: ${env:NEW_RELIC_LICENSE_KEY}
+  # Dynatrace OTLP exporter
+    otlphttp/dynatrace:
+      endpoint: "https://mjo72342.live.dynatrace.com/api/v2/otlp"
+      headers:
+        Authorization: "Api-Token ${env:DT_API_TOKEN}"
+  # Datadog native exporter
+    datadog:
+      api:
+        site: us5.datadoghq.com
+        key: ${env:DD_API_KEY}
+  ##############################
+  # SERVICE PIPELINES
+  ##############################
+  service:
+    pipelines:
+# Metrics pipeline
+      metrics:
+        receivers: [kubeletstats, hostmetrics, otlp]
+        processors: [memory_limiter, k8sattributes, resource, cumulativetodelta, batch]
+        exporters: [otlphttp/newrelic, otlphttp/dynatrace, datadog]
+# Logs pipeline
+      logs:
+        # Receiver is added automatically by preset (filelog)
+        processors: [memory_limiter, k8sattributes, resource, batch]
+        exporters: [otlphttp/newrelic, otlphttp/dynatrace, datadog]
+# Traces pipeline
+      traces:
+        receivers: [otlp]
+        processors: [memory_limiter, k8sattributes, resource, batch]
+        exporters: [otlphttp/newrelic, otlphttp/dynatrace, datadog, debug]
