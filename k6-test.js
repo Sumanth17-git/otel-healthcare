@@ -9,7 +9,7 @@ const loginDuration = new Trend('login_duration');
 export const options = {
   stages: [
     { duration: '15s', target: 5 },   // ramp up to 5 users
-    { duration: '30s', target: 10 },  // hold at 10 users
+    { duration: '1800s', target: 10 },  // hold at 10 users
     { duration: '10s', target: 0 },   // ramp down
   ],
   thresholds: {
